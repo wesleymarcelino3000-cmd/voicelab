@@ -151,10 +151,11 @@ export default function Home() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Não foi possível gerar o áudio.");
       }
+      const provider = res.headers.get("x-voice-provider") || "principal";
       const blob = await res.blob();
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       setAudioUrl(URL.createObjectURL(blob));
-      setMessage("Áudio gerado com sucesso.");
+      setMessage(provider === "reserva" ? "Áudio gerado pelo motor reserva." : "Áudio gerado pelo motor principal.");
     } catch (e) {
       setMessage(e.message);
     } finally {
