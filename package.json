@@ -1,6 +1,6 @@
 {
   "name": "voicelab",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,7 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@gradio/client": "^1.15.0",
+    "@gradio/client": "^2.5.0",
     "@supabase/supabase-js": "^2.57.4",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
