@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AudioLines, Upload, Sparkles, Download, Trash2, ShieldCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AudioLines, Upload, Sparkles, Download, Trash2, ShieldCheck, Play, Square } from "lucide-react";
 
 const LS_KEY = "voicelab_authorized_voices_v2";
 const DB_NAME = "voicelab-audio-db";
@@ -57,16 +57,58 @@ export default function Home() {
   const [audioUrl, setAudioUrl] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [previewingId, setPreviewingId] = useState("");
+  const previewAudioRef = useRef(null);
+  const previewUrlRef = useRef("");
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem(LS_KEY) || "[]");
     setVoices(saved);
     if (saved[0]) setSelectedVoiceId(saved[0].id);
+    return () => stopPreview();
   }, []);
 
   function saveVoices(next) {
     setVoices(next);
     localStorage.setItem(LS_KEY, JSON.stringify(next));
+  }
+
+  function stopPreview() {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+      previewAudioRef.current = null;
+    }
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = "";
+    }
+    setPreviewingId("");
+  }
+
+  async function previewVoice(id) {
+    if (previewingId === id) return stopPreview();
+    stopPreview();
+    try {
+      const sample = await getSample(id);
+      if (!sample) throw new Error("A amostra dessa voz não foi encontrada neste dispositivo.");
+      const url = URL.createObjectURL(sample);
+      previewUrlRef.current = url;
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      setPreviewingId(id);
+      audio.onended = stopPreview;
+      audio.onerror = () => {
+        stopPreview();
+        setMessage("Não foi possível reproduzir a prévia dessa voz.");
+      };
+      await audio.play();
+      window.setTimeout(() => {
+        if (previewAudioRef.current === audio) stopPreview();
+      }, 8000);
+    } catch (e) {
+      setMessage(e.message || "Não foi possível tocar a prévia.");
+    }
   }
 
   async function addAuthorizedVoice() {
@@ -95,22 +137,20 @@ export default function Home() {
 
   async function generate() {
     if (!selectedVoiceId || !text.trim()) return setMessage("Selecione uma voz e digite uma mensagem.");
+    stopPreview();
     setLoading(true);
     setMessage("");
     try {
       const reference = await getSample(selectedVoiceId);
       if (!reference) throw new Error("A amostra dessa voz não foi encontrada neste dispositivo.");
-
       const form = new FormData();
       form.append("text", text.trim());
       form.append("reference", reference, reference.name || "reference.wav");
-
       const res = await fetch("/api/speech", { method: "POST", body: form });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Não foi possível gerar o áudio.");
       }
-
       const blob = await res.blob();
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       setAudioUrl(URL.createObjectURL(blob));
@@ -123,6 +163,7 @@ export default function Home() {
   }
 
   async function removeVoice(id) {
+    if (previewingId === id) stopPreview();
     await deleteSample(id).catch(() => {});
     const next = voices.filter(v => v.id !== id);
     saveVoices(next);
@@ -152,7 +193,7 @@ export default function Home() {
 
       <section className="panel gapTop">
         <h2>2. Gerar áudio</h2>
-        <div className="field"><label>Voz salva</label><select value={selectedVoiceId} onChange={e => setSelectedVoiceId(e.target.value)}><option value="">Selecione</option>{voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
+        <div className="field"><label>Voz salva</label><div style={{display:"flex",gap:8}}><select value={selectedVoiceId} onChange={e => { stopPreview(); setSelectedVoiceId(e.target.value); }}><option value="">Selecione</option>{voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select><button className="secondary" type="button" disabled={!selectedVoiceId} onClick={() => previewVoice(selectedVoiceId)}>{previewingId === selectedVoiceId ? <><Square size={16}/> Parar</> : <><Play size={16}/> Prévia</>}</button></div></div>
         <div className="field"><label>Mensagem</label><textarea value={text} onChange={e => setText(e.target.value)} maxLength={300} placeholder="Digite o texto que será falado..." /></div>
         <div className="hint">{text.length}/300 caracteres por geração na versão gratuita.</div>
         <button className="primary" onClick={generate} disabled={loading}><Sparkles size={18}/> {loading ? "Processando..." : "Gerar áudio"}</button>
@@ -161,7 +202,7 @@ export default function Home() {
 
       <section className="panel gapTop">
         <h2>Vozes salvas neste dispositivo</h2>
-        <div className="voiceGrid">{voices.length === 0 ? <div className="empty">Nenhuma voz cadastrada.</div> : voices.map(v => <div className="voiceCard" key={v.id}><div className="avatar"><AudioLines size={21}/></div><div className="voiceMeta"><strong>{v.name}</strong><span>{v.fileName || "voz autorizada"}</span></div><button className="iconBtn" onClick={() => removeVoice(v.id)}><Trash2 size={16}/></button></div>)}</div>
+        <div className="voiceGrid">{voices.length === 0 ? <div className="empty">Nenhuma voz cadastrada.</div> : voices.map(v => <div className="voiceCard" key={v.id}><div className="avatar"><AudioLines size={21}/></div><div className="voiceMeta"><strong>{v.name}</strong><span>{v.fileName || "voz autorizada"}</span></div><button className="secondary" type="button" onClick={() => previewVoice(v.id)}>{previewingId === v.id ? <><Square size={15}/> Parar</> : <><Play size={15}/> Ouvir</>}</button><button className="iconBtn" onClick={() => removeVoice(v.id)}><Trash2 size={16}/></button></div>)}</div>
       </section>
 
       {message && <div className="toast">{message}</div>}
