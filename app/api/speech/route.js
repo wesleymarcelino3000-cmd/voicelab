@@ -1,54 +1,54 @@
 export const runtime = "nodejs";
 
+import { Client, handle_file } from "@gradio/client";
+
 export async function POST(request) {
   try {
-    if (!process.env.ELEVENLABS_API_KEY) {
-      return Response.json({ error: "ELEVENLABS_API_KEY não configurada." }, { status: 500 });
+    const source = process.env.HF_SPACE_ID;
+    if (!source) {
+      return Response.json({ error: "HF_SPACE_ID não configurado na Vercel." }, { status: 500 });
     }
 
-    const { voiceId, text } = await request.json();
+    const form = await request.formData();
+    const text = String(form.get("text") || "").trim();
+    const reference = form.get("reference");
 
-    if (!voiceId || !text?.trim()) {
-      return Response.json({ error: "Voz e texto são obrigatórios." }, { status: 400 });
+    if (!text || !reference) {
+      return Response.json({ error: "Texto e amostra de voz são obrigatórios." }, { status: 400 });
     }
 
-    if (text.length > 5000) {
-      return Response.json({ error: "O texto ultrapassa o limite de 5000 caracteres." }, { status: 400 });
+    if (text.length > 3000) {
+      return Response.json({ error: "Use no máximo 3000 caracteres por geração." }, { status: 400 });
     }
 
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": process.env.ELEVENLABS_API_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          text,
-          model_id: "eleven_multilingual_v2"
-        })
-      }
-    );
+    const options = process.env.HF_TOKEN ? { hf_token: process.env.HF_TOKEN } : undefined;
+    const app = await Client.connect(source, options);
+    const result = await app.predict("/generate", {
+      text,
+      reference_audio: handle_file(reference),
+      language: "pt"
+    });
 
-    if (!response.ok) {
-      let data = {};
-      try { data = await response.json(); } catch {}
-      return Response.json(
-        { error: data?.detail?.message || data?.detail || data?.message || "A ElevenLabs não conseguiu gerar o áudio." },
-        { status: response.status }
-      );
+    const output = result?.data?.[0];
+    const audioUrl = typeof output === "string" ? output : output?.url;
+    if (!audioUrl) {
+      return Response.json({ error: "O servidor de áudio não retornou um arquivo." }, { status: 502 });
     }
 
-    const audio = await response.arrayBuffer();
+    const audioResponse = await fetch(audioUrl);
+    if (!audioResponse.ok) {
+      return Response.json({ error: "Não foi possível baixar o áudio gerado." }, { status: 502 });
+    }
+
+    const audio = await audioResponse.arrayBuffer();
     return new Response(audio, {
       headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Disposition": "inline; filename=voice.mp3",
+        "Content-Type": audioResponse.headers.get("content-type") || "audio/wav",
+        "Content-Disposition": "inline; filename=voicelab.wav",
         "Cache-Control": "no-store"
       }
     });
   } catch (error) {
-    return Response.json({ error: error?.message || "Erro interno." }, { status: 500 });
+    return Response.json({ error: error?.message || "Erro interno ao gerar áudio." }, { status: 500 });
   }
 }
