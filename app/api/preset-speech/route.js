@@ -1,58 +1,81 @@
 export const runtime = "nodejs";
 
-import { Client } from "@gradio/client";
+const PRESET_ORDER = [
+  "male_01","male_02","male_03","male_04","male_05",
+  "female_01","female_02","female_03","female_04","female_05",
+  "child_01","child_02","child_03","child_04","child_05",
+  "character_wizard","character_pirate","character_robot","character_storyteller","character_creature"
+];
 
-const PRIMARY_SPACE = process.env.HF_SPACE_ID_PRIMARY || "ResembleAI/Chatterbox-Multilingual-TTS-V3";
-const SECONDARY_SPACE = process.env.HF_SPACE_ID_SECONDARY || "ResembleAI/Chatterbox-Multilingual-TTS";
+async function getElevenLabsVoices(apiKey) {
+  const response = await fetch("https://api.elevenlabs.io/v1/voices", {
+    headers: { "xi-api-key": apiKey },
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Não foi possível carregar as vozes disponíveis.");
+  const data = await response.json();
+  const voices = Array.isArray(data?.voices) ? data.voices.filter(v => v?.voice_id) : [];
+  if (!voices.length) throw new Error("Nenhuma voz pronta está disponível na conta de voz.");
+  return voices;
+}
 
-const PRESETS = {
-  male_01: [101, 0.42, 0.72, 0.48], male_02: [102, 0.50, 0.76, 0.52], male_03: [103, 0.58, 0.70, 0.46], male_04: [104, 0.46, 0.84, 0.56], male_05: [105, 0.54, 0.78, 0.50],
-  female_01: [201, 0.44, 0.74, 0.50], female_02: [202, 0.52, 0.82, 0.54], female_03: [203, 0.60, 0.76, 0.48], female_04: [204, 0.48, 0.88, 0.56], female_05: [205, 0.56, 0.72, 0.52],
-  child_01: [301, 0.78, 0.90, 0.42], child_02: [302, 0.82, 0.94, 0.40], child_03: [303, 0.74, 0.88, 0.44], child_04: [304, 0.86, 0.96, 0.38], child_05: [305, 0.80, 0.92, 0.41],
-  character_wizard: [401, 0.92, 0.72, 0.62], character_pirate: [402, 1.05, 0.86, 0.58], character_robot: [403, 0.30, 0.55, 0.70], character_storyteller: [404, 0.70, 0.68, 0.46], character_creature: [405, 1.18, 1.00, 0.40]
-};
+async function generateWithElevenLabs(slug, text) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) throw new Error("As vozes prontas ainda não estão configuradas no servidor.");
 
-async function runSpace(spaceId, mode, text, preset) {
-  const [seed, exaggeration, temperature, cfg] = preset;
-  const options = process.env.HF_TOKEN ? { hf_token: process.env.HF_TOKEN } : undefined;
-  const app = await Client.connect(spaceId, options);
-  const args = mode === "v3"
-    ? [text, null, "pt", exaggeration, temperature, seed, cfg]
-    : [text, "pt", null, exaggeration, temperature, seed, cfg];
-  const result = await app.predict("/generate_tts_audio", args);
-  const output = result?.data?.[0];
-  const audioUrl = typeof output === "string" ? output : output?.url;
-  if (!audioUrl) throw new Error(`${spaceId} não retornou áudio.`);
-  const audioResponse = await fetch(audioUrl);
-  if (!audioResponse.ok) throw new Error(`Falha ao baixar áudio de ${spaceId}.`);
-  return { audio: await audioResponse.arrayBuffer(), contentType: audioResponse.headers.get("content-type") || "audio/wav", provider: spaceId };
+  const index = PRESET_ORDER.indexOf(slug);
+  if (index < 0) throw new Error("Preset inválido.");
+
+  const voices = await getElevenLabsVoices(apiKey);
+  const voice = voices[index % voices.length];
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice.voice_id}`, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      "Accept": "audio/mpeg"
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.48,
+        similarity_boost: 0.72,
+        style: 0.2,
+        use_speaker_boost: true
+      }
+    })
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try { detail = (await response.json())?.detail?.message || ""; } catch {}
+    throw new Error(detail || "Não foi possível gerar o áudio com esta voz.");
+  }
+
+  return response;
 }
 
 export async function POST(request) {
   try {
     const { slug, text } = await request.json();
-    const preset = PRESETS[slug];
     const cleanText = String(text || "").trim();
-    if (!preset) return Response.json({ error: "Preset inválido." }, { status: 400 });
+
+    if (!PRESET_ORDER.includes(slug)) return Response.json({ error: "Preset inválido." }, { status: 400 });
     if (!cleanText) return Response.json({ error: "Digite uma mensagem." }, { status: 400 });
     if (cleanText.length > 300) return Response.json({ error: "Gere até 300 caracteres por vez." }, { status: 400 });
 
-    let result;
-    try {
-      result = await runSpace(PRIMARY_SPACE, "v3", cleanText, preset);
-    } catch {
-      result = await runSpace(SECONDARY_SPACE, "legacy", cleanText, preset);
-    }
-
-    return new Response(result.audio, {
+    const audioResponse = await generateWithElevenLabs(slug, cleanText);
+    return new Response(await audioResponse.arrayBuffer(), {
       headers: {
-        "Content-Type": result.contentType,
-        "Content-Disposition": "inline; filename=voicelab.wav",
+        "Content-Type": audioResponse.headers.get("content-type") || "audio/mpeg",
+        "Content-Disposition": "inline; filename=voicelab.mp3",
         "Cache-Control": "no-store",
-        "X-VoiceLab-Provider": result.provider
+        "X-VoiceLab-Provider": "elevenlabs"
       }
     });
   } catch (error) {
-    return Response.json({ error: error?.message || "Erro ao gerar áudio." }, { status: 500 });
+    console.error("preset-speech:", error);
+    return Response.json({ error: error?.message || "Não foi possível gerar o áudio." }, { status: 500 });
   }
 }
