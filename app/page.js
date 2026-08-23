@@ -153,7 +153,8 @@ export default function Home() {
       <section className="panel gapTop">
         <h2>2. Gerar áudio</h2>
         <div className="field"><label>Voz salva</label><select value={selectedVoiceId} onChange={e => setSelectedVoiceId(e.target.value)}><option value="">Selecione</option>{voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
-        <div className="field"><label>Mensagem</label><textarea value={text} onChange={e => setText(e.target.value)} maxLength={3000} placeholder="Digite o texto que será falado..." /></div>
+        <div className="field"><label>Mensagem</label><textarea value={text} onChange={e => setText(e.target.value)} maxLength={300} placeholder="Digite o texto que será falado..." /></div>
+        <div className="hint">{text.length}/300 caracteres por geração na versão gratuita.</div>
         <button className="primary" onClick={generate} disabled={loading}><Sparkles size={18}/> {loading ? "Processando..." : "Gerar áudio"}</button>
         {audioUrl && <div className="audioCard"><audio controls src={audioUrl}/><a className="download" href={audioUrl} download="voicelab.wav"><Download size={17}/> Baixar áudio</a></div>}
       </section>
