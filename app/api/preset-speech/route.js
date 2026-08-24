@@ -1,81 +1,74 @@
 export const runtime = "nodejs";
 
-const PRESET_ORDER = [
-  "male_01","male_02","male_03","male_04","male_05",
-  "female_01","female_02","female_03","female_04","female_05",
-  "child_01","child_02","child_03","child_04","child_05",
-  "character_wizard","character_pirate","character_robot","character_storyteller","character_creature"
-];
+import { EdgeTTS } from "node-edge-tts";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
-async function getElevenLabsVoices(apiKey) {
-  const response = await fetch("https://api.elevenlabs.io/v1/voices", {
-    headers: { "xi-api-key": apiKey },
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error("Não foi possível carregar as vozes disponíveis.");
-  const data = await response.json();
-  const voices = Array.isArray(data?.voices) ? data.voices.filter(v => v?.voice_id) : [];
-  if (!voices.length) throw new Error("Nenhuma voz pronta está disponível na conta de voz.");
-  return voices;
-}
+const PRESETS = {
+  male_01: { voice: "pt-BR-AntonioNeural", pitch: "-8%", rate: "-3%" },
+  male_02: { voice: "pt-BR-AntonioNeural", pitch: "+2%", rate: "+5%" },
+  male_03: { voice: "pt-BR-AntonioNeural", pitch: "-15%", rate: "-7%" },
+  male_04: { voice: "pt-BR-AntonioNeural", pitch: "+7%", rate: "+10%" },
+  male_05: { voice: "pt-BR-AntonioNeural", pitch: "-3%", rate: "+2%" },
+  female_01: { voice: "pt-BR-FranciscaNeural", pitch: "-3%", rate: "-2%" },
+  female_02: { voice: "pt-BR-FranciscaNeural", pitch: "+5%", rate: "+5%" },
+  female_03: { voice: "pt-BR-FranciscaNeural", pitch: "+10%", rate: "+2%" },
+  female_04: { voice: "pt-BR-FranciscaNeural", pitch: "-8%", rate: "+7%" },
+  female_05: { voice: "pt-BR-FranciscaNeural", pitch: "+2%", rate: "-6%" },
+  child_01: { voice: "pt-BR-FranciscaNeural", pitch: "+25%", rate: "+8%" },
+  child_02: { voice: "pt-BR-AntonioNeural", pitch: "+25%", rate: "+10%" },
+  child_03: { voice: "pt-BR-FranciscaNeural", pitch: "+32%", rate: "+3%" },
+  child_04: { voice: "pt-BR-AntonioNeural", pitch: "+32%", rate: "+5%" },
+  child_05: { voice: "pt-BR-FranciscaNeural", pitch: "+20%", rate: "+12%" },
+  character_wizard: { voice: "pt-BR-AntonioNeural", pitch: "-22%", rate: "-12%" },
+  character_pirate: { voice: "pt-BR-AntonioNeural", pitch: "-12%", rate: "-5%" },
+  character_robot: { voice: "pt-BR-AntonioNeural", pitch: "-28%", rate: "+2%" },
+  character_storyteller: { voice: "pt-BR-FranciscaNeural", pitch: "-10%", rate: "-10%" },
+  character_creature: { voice: "pt-BR-AntonioNeural", pitch: "-35%", rate: "-15%" }
+};
 
-async function generateWithElevenLabs(slug, text) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) throw new Error("As vozes prontas ainda não estão configuradas no servidor.");
-
-  const index = PRESET_ORDER.indexOf(slug);
-  if (index < 0) throw new Error("Preset inválido.");
-
-  const voices = await getElevenLabsVoices(apiKey);
-  const voice = voices[index % voices.length];
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice.voice_id}`, {
-    method: "POST",
-    headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json",
-      "Accept": "audio/mpeg"
-    },
-    body: JSON.stringify({
-      text,
-      model_id: "eleven_multilingual_v2",
-      voice_settings: {
-        stability: 0.48,
-        similarity_boost: 0.72,
-        style: 0.2,
-        use_speaker_boost: true
-      }
-    })
-  });
-
-  if (!response.ok) {
-    let detail = "";
-    try { detail = (await response.json())?.detail?.message || ""; } catch {}
-    throw new Error(detail || "Não foi possível gerar o áudio com esta voz.");
+async function synthesize(text, preset) {
+  const file = join(tmpdir(), `voicelab-${randomUUID()}.mp3`);
+  try {
+    const tts = new EdgeTTS({
+      voice: preset.voice,
+      lang: "pt-BR",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      pitch: preset.pitch,
+      rate: preset.rate,
+      volume: "+0%",
+      timeout: 20000
+    });
+    await tts.ttsPromise(text, file);
+    return await readFile(file);
+  } finally {
+    await unlink(file).catch(() => {});
   }
-
-  return response;
 }
 
 export async function POST(request) {
   try {
     const { slug, text } = await request.json();
+    const preset = PRESETS[slug];
     const cleanText = String(text || "").trim();
 
-    if (!PRESET_ORDER.includes(slug)) return Response.json({ error: "Preset inválido." }, { status: 400 });
+    if (!preset) return Response.json({ error: "Preset inválido." }, { status: 400 });
     if (!cleanText) return Response.json({ error: "Digite uma mensagem." }, { status: 400 });
     if (cleanText.length > 300) return Response.json({ error: "Gere até 300 caracteres por vez." }, { status: 400 });
 
-    const audioResponse = await generateWithElevenLabs(slug, cleanText);
-    return new Response(await audioResponse.arrayBuffer(), {
+    const audio = await synthesize(cleanText, preset);
+    return new Response(audio, {
       headers: {
-        "Content-Type": audioResponse.headers.get("content-type") || "audio/mpeg",
+        "Content-Type": "audio/mpeg",
         "Content-Disposition": "inline; filename=voicelab.mp3",
         "Cache-Control": "no-store",
-        "X-VoiceLab-Provider": "elevenlabs"
+        "X-VoiceLab-Provider": "edge-tts"
       }
     });
   } catch (error) {
     console.error("preset-speech:", error);
-    return Response.json({ error: error?.message || "Não foi possível gerar o áudio." }, { status: 500 });
+    return Response.json({ error: "Não foi possível gerar o áudio agora. Tente novamente em alguns segundos." }, { status: 500 });
   }
 }
